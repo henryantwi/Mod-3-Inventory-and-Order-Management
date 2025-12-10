@@ -271,9 +271,7 @@ ORDER BY c.full_name, o.order_date;
 -- View: CustomerSalesSummary
 -- Pre-calculates total amount spent by each customer for simplified analytics
 -- -----------------------------------------------
-DROP VIEW IF EXISTS CustomerSalesSummary;
-
-CREATE VIEW CustomerSalesSummary AS
+CREATE OR REPLACE VIEW CustomerSalesSummary AS
 SELECT 
     c.id AS customer_id,
     c.full_name AS customer_name,
@@ -431,8 +429,8 @@ WHERE i.quantity_on_hand < 100
 ORDER BY i.quantity_on_hand;
 
 
--- -----------------------------------------------
--- Revenue by Category
+-- Revenue by Category----------------------------
+
 -- -----------------------------------------------
 SELECT 
     p.category,
