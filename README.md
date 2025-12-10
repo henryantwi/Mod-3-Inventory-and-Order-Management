@@ -27,36 +27,11 @@ This project is a capstone for the SQL module, covering the complete database li
 
 ## 📊 Database Design
 
-### Entity-Relationship Model
+### Entity-Relationship Diagram
 
 The database consists of 5 interconnected tables following a normalized design:
 
-```
-┌─────────────┐       ┌─────────────┐       ┌─────────────┐
-│  CUSTOMERS  │       │   ORDERS    │       │  PRODUCTS   │
-├─────────────┤       ├─────────────┤       ├─────────────┤
-│ id (PK)     │──┐    │ id (PK)     │    ┌──│ id (PK)     │
-│ full_name   │  │    │ customer_id │────┘  │ name        │
-│ email       │  └───>│ order_date  │       │ category    │
-│ phone       │       │ total_amount│       │ price       │
-│ shipping_   │       │ status      │       │ created_at  │
-│   address   │       │ created_at  │       └─────────────┘
-│ created_at  │       └─────────────┘              │
-└─────────────┘              │                     │
-                             │                     │
-                             ▼                     ▼
-                    ┌─────────────────┐    ┌─────────────┐
-                    │  ORDER_ITEMS    │    │  INVENTORY  │
-                    │  (Bridge Table) │    ├─────────────┤
-                    ├─────────────────┤    │ id (PK)     │
-                    │ id (PK)         │    │ product_id  │──>
-                    │ order_id (FK)   │──> │ quantity_on_│
-                    │ product_id (FK) │──> │   hand      │
-                    │ quantity        │    │ last_updated│
-                    │ price_at_       │    └─────────────┘
-                    │   purchase      │
-                    └─────────────────┘
-```
+![ERD Diagram](docs/erd_diagram.png)
 
 ### Relationships
 
