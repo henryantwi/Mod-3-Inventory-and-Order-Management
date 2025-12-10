@@ -268,7 +268,7 @@ CALL ProcessNewOrder(1, 2, 5);  -- Customer 1 orders 5 units of Product 2
 
 1. **Clone the repository**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/henryantwi/Mod-3-Inventory-and-Order-Management.git
    cd Inventory_and_Order_Management_System
    ```
 
