@@ -244,7 +244,6 @@ ORDER BY p.category, rank_in_category;
 -- -----------------------------------------------
 -- Analytical Query 2: Customer Order Frequency
 -- Show customers with the date of their previous order alongside their current order
--- Note: Using DATEDIFF instead of date subtraction (PostgreSQL)
 -- -----------------------------------------------
 SELECT 
     c.full_name AS customer_name,
