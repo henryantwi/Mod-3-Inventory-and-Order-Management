@@ -378,10 +378,3 @@ ORDER BY i.quantity_on_hand;
 
 This project is part of a data engineering educational module.
 
----
-
-## 👤 Author
-
-Henry Nana Antwi
-
-*Last Updated: December 2025*
