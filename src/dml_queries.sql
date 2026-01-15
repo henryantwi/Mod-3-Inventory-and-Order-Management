@@ -335,7 +335,7 @@ BEGIN
             SET MESSAGE_TEXT = 'Product does not exist';
     END IF;
     
-    -- Check current stock level (lock the row for update simul)
+    -- Check current stock level (lock the row for update simul. avoid overselling)
     SELECT quantity_on_hand INTO v_available_stock
     FROM inventory 
     WHERE product_id = p_product_id
