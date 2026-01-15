@@ -377,4 +377,3 @@ ORDER BY i.quantity_on_hand;
 ## License
 
 This project is part of a data engineering educational module.
-
