@@ -79,6 +79,7 @@ CREATE TABLE order_items (
     CONSTRAINT chk_order_item_price CHECK (price_at_purchase >= 0)
 ) ENGINE=InnoDB;
 
+
 -- ============================================
 -- FOREIGN KEY CONSTRAINTS
 -- ============================================

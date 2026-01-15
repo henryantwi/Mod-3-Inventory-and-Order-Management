@@ -365,7 +365,7 @@ BEGIN
     INSERT INTO orders (customer_id, order_date, total_amount, status)
     VALUES (p_customer_id, CURDATE(), v_total_amount, 'Pending');
     
-    -- Get the new order ID (MySQL equivalent of RETURNING)
+    -- Get the new order ID
     SET v_new_order_id = LAST_INSERT_ID();
     
     -- Create order item
@@ -392,10 +392,10 @@ DELIMITER ;
 -- ============================================
 
 -- Example 1: Successful order (uncomment to run)
--- CALL ProcessNewOrder(1, 2, 5);  -- Customer 1 orders 5 Wireless Mice
+# CALL ProcessNewOrder(1, 2, 5);  -- Customer 1 orders 5 Wireless Mice
 
 -- Example 2: This would fail due to insufficient stock (uncomment to test)
--- CALL ProcessNewOrder(1, 1, 1000);  -- Attempting to order 1000 laptops
+# CALL ProcessNewOrder(1, 1, 1000);  -- Attempting to order 1000 laptops
 
 -- Example 3: This would fail due to invalid customer (uncomment to test)
 -- CALL ProcessNewOrder(999, 1, 1);  -- Invalid customer ID
