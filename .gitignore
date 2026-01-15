@@ -2,7 +2,8 @@
 .idea
 .cursor
 .zencoder
-Full_Task.pdf
+task.md
 .vscode
-SQL_Cheat_Sheet.md
-Step3_Deep_Dive_Cheat_Sheet.md
+cursor.md
+cheat_sheet.md
+step3_deep_dive_cheat_sheet.md

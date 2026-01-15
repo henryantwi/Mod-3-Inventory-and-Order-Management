@@ -169,25 +169,25 @@ FROM orders
 WHERE status IN ('Shipped', 'Delivered');
 
 
--- -----------------------------------------------
+
 -- KPI 2: Top 10 Customers by Total Spending
 -- Find the top 10 customers showing Customer Name and Total Amount Spent
--- -----------------------------------------------
+
 SELECT 
     c.full_name AS customer_name,
     SUM(o.total_amount) AS total_amount_spent
 FROM customers c
 INNER JOIN orders o ON c.id = o.customer_id
 WHERE o.status IN ('Shipped', 'Delivered')
-GROUP BY c.id, c.full_name
+GROUP BY c.id
 ORDER BY total_amount_spent DESC
 LIMIT 10;
 
 
--- -----------------------------------------------
+
 -- KPI 3: Best-Selling Products
 -- List the top 5 best-selling products by quantity sold
--- -----------------------------------------------
+
 SELECT 
     p.name AS product_name,
     p.category,
@@ -201,50 +201,45 @@ ORDER BY total_quantity_sold DESC
 LIMIT 5;
 
 
--- -----------------------------------------------
 -- KPI 4: Monthly Sales Trend
 -- Show total sales revenue for each month
--- Note: Using DATE_FORMAT instead of TO_CHAR (PostgreSQL)
--- -----------------------------------------------
+
 SELECT 
-    DATE_FORMAT(order_date, '%Y-%m') AS month,
-    DATE_FORMAT(order_date, '%M %Y') AS month_name,
-    SUM(total_amount) AS monthly_revenue,
-    COUNT(*) AS total_orders
+    DATE_FORMAT(order_date, '%M %Y') AS month_name, 
+    SUM(total_amount) AS monthly_revenue
 FROM orders
 WHERE status IN ('Shipped', 'Delivered')
-GROUP BY DATE_FORMAT(order_date, '%Y-%m'), DATE_FORMAT(order_date, '%M %Y')
+GROUP BY DATE_FORMAT(order_date, '%Y-%m')
 ORDER BY month;
 
 
--- ============================================
 -- SECTION 3: ANALYTICAL QUERIES (Window Functions)
--- ============================================
+
 
 -- -----------------------------------------------
 -- Analytical Query 1: Sales Rank by Category
 -- For each product category, rank products by total sales revenue
 -- -----------------------------------------------
-SELECT 
+SELECT
     p.category,
     p.name AS product_name,
     SUM(oi.quantity * oi.price_at_purchase) AS total_sales_revenue,
     RANK() OVER (
-        PARTITION BY p.category 
+        PARTITION BY p.category
         ORDER BY SUM(oi.quantity * oi.price_at_purchase) DESC
     ) AS rank_in_category
 FROM products p
 INNER JOIN order_items oi ON p.id = oi.product_id
 INNER JOIN orders o ON oi.order_id = o.id
 WHERE o.status IN ('Shipped', 'Delivered')
-GROUP BY p.category, p.id, p.name
+GROUP BY p.category, p.id
 ORDER BY p.category, rank_in_category;
 
 
--- -----------------------------------------------
+
 -- Analytical Query 2: Customer Order Frequency
 -- Show customers with the date of their previous order alongside their current order
--- -----------------------------------------------
+
 SELECT 
     c.full_name AS customer_name,
     o.id AS order_id,
@@ -340,7 +335,7 @@ BEGIN
             SET MESSAGE_TEXT = 'Product does not exist';
     END IF;
     
-    -- Check current stock level (lock the row for update)
+    -- Check current stock level (lock the row for update simul)
     SELECT quantity_on_hand INTO v_available_stock
     FROM inventory 
     WHERE product_id = p_product_id
