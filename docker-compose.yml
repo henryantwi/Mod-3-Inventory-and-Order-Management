@@ -5,11 +5,21 @@ services:
     restart: unless-stopped
     env_file:
       - .env.docker
+    command:
+      [
+        "mysqld",
+        "--general-log=1",
+        "--general-log-file=/var/log/mysql/general.log",
+        "--slow-query-log=1",
+        "--slow-query-log-file=/var/log/mysql/slow.log",
+        "--long-query-time=0"
+      ]
     ports:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./src:/docker-entrypoint-initdb.d
+      - ./logs:/var/log/mysql
 
   phpmyadmin:
     image: phpmyadmin:latest

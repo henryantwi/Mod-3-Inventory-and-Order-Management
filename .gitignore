@@ -7,3 +7,7 @@ task.md
 cursor.md
 cheat_sheet.md
 step3_deep_dive_cheat_sheet.md
+
+# MySQL logs
+logs/*.log
+logs/*.log.*
