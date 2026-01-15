@@ -13,7 +13,3 @@ Logging is enabled via environment variables in `docker-compose.yml`:
 - `GENERAL_LOG=1` - Enables general query log
 - `SLOW_QUERY_LOG=1` - Enables slow query log
 - `LONG_QUERY_TIME=0` - Logs all queries (set to a number in seconds to only log slow queries)
-
-## Note
-
-Log files will be created automatically when MySQL starts and queries are executed. If you don't see log files immediately, wait for the first query to be executed.
