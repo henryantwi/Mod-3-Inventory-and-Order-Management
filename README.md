@@ -2,7 +2,7 @@
 
 A comprehensive MySQL database solution for an e-commerce company's inventory and order management system. This project demonstrates database design, schema implementation (DDL), and advanced SQL querying (DML) to solve realistic business problems.
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Project Overview](#project-overview)
 - [Database Design](#database-design)
@@ -14,7 +14,7 @@ A comprehensive MySQL database solution for an e-commerce company's inventory an
 
 ---
 
-## 🎯 Project Overview
+## Project Overview
 
 This project is a capstone for the SQL module, covering the complete database lifecycle from design to analysis. It includes:
 
@@ -25,7 +25,7 @@ This project is a capstone for the SQL module, covering the complete database li
 
 ---
 
-## 📊 Database Design
+## Database Design
 
 ### Entity-Relationship Diagram
 
@@ -44,7 +44,7 @@ The database consists of 5 interconnected tables following a normalized design:
 
 ---
 
-## 🏗️ Schema Implementation
+## Schema Implementation
 
 ### Tables Created
 
@@ -133,7 +133,7 @@ CREATE INDEX idx_products_category ON products(category);
 
 ---
 
-## 📈 KPI Queries & Analytics
+## KPI Queries & Analytics
 
 ### Business KPIs
 
@@ -257,7 +257,7 @@ CALL ProcessNewOrder(1, 2, 5);  -- Customer 1 orders 5 units of Product 2
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
@@ -300,7 +300,7 @@ You can customize the database configuration:
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 Inventory_and_Order_Management_System/
@@ -314,7 +314,7 @@ Inventory_and_Order_Management_System/
 
 ---
 
-## 💡 Usage Examples
+## Usage Examples
 
 ### Query the CustomerSalesSummary View
 ```sql
@@ -353,7 +353,7 @@ ORDER BY i.quantity_on_hand;
 
 ---
 
-## 📝 Sample Data Overview
+## Sample Data Overview
 
 | Entity | Count | Description |
 |--------|-------|-------------|
@@ -365,7 +365,7 @@ ORDER BY i.quantity_on_hand;
 
 ---
 
-## 🔧 Technologies Used
+## Technologies Used
 
 - **Database**: MySQL 8.0
 - **Administration**: phpMyAdmin
@@ -374,7 +374,7 @@ ORDER BY i.quantity_on_hand;
 
 ---
 
-## 📄 License
+## License
 
 This project is part of a data engineering educational module.
 
