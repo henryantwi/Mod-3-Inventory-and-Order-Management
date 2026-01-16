@@ -29,7 +29,7 @@ This project is a capstone for the SQL module, covering the complete database li
 
 ### Entity-Relationship Diagram
 
-The database consists of 5 interconnected tables following a normalized design:
+The database consists of 6 interconnected tables following a normalized design:
 
 ![ERD Diagram](docs/erd_diagram.png)
 
@@ -41,6 +41,7 @@ The database consists of 5 interconnected tables following a normalized design:
 | Orders → Order Items | One-to-Many | An order can contain multiple items |
 | Products → Order Items | One-to-Many | A product can appear in multiple order items |
 | Products → Inventory | One-to-One | Each product has one inventory record |
+| Inventory → Inventory Logs | One-to-Many | Inventory changes are logged automatically via triggers |
 
 ---
 
@@ -109,6 +110,28 @@ CREATE TABLE order_items (
     CONSTRAINT chk_order_item_price CHECK (price_at_purchase >= 0)
 );
 ```
+
+#### 6. Inventory Logs Table (Audit Table)
+```sql
+CREATE TABLE inventory_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    log_type VARCHAR(50) NOT NULL,
+    product_id INT,
+    order_id INT,
+    customer_id INT,
+    quantity_changed INT,
+    old_quantity INT,
+    new_quantity INT,
+    message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### SQL Triggers
+
+| Trigger | Event | Description |
+|---------|-------|-------------|
+| `trg_inventory_update_log` | AFTER UPDATE on inventory | Automatically logs all inventory quantity changes |
 
 ### Data Integrity Features
 
@@ -243,16 +266,27 @@ GROUP BY c.id, c.full_name, c.email;
 ```
 
 #### ProcessNewOrder Stored Procedure
-Handles order creation with transaction management:
-- ✅ Validates customer exists
-- ✅ Validates product exists
-- ✅ Checks sufficient inventory stock
-- ✅ Updates inventory on success
+Handles bulk order creation with JSON array input and transaction management:
+- ✅ Accepts multiple products via JSON array
+- ✅ Uses `IF EXISTS` for efficient customer validation
+- ✅ Validates all products exist and have sufficient stock
+- ✅ Updates inventory on success (triggers automatic logging)
 - ✅ Creates order and order items
-- ❌ Rolls back transaction on failure
+- ✅ Logs all actions to `inventory_logs` table
+- ❌ Rolls back entire transaction on any failure
 
+**JSON Input Format:**
+```json
+[{"product_id": 1, "quantity": 2}, {"product_id": 3, "quantity": 1}]
+```
+
+**Examples:**
 ```sql
-CALL ProcessNewOrder(1, 2, 5);  -- Customer 1 orders 5 units of Product 2
+-- Single product order
+CALL ProcessNewOrder(1, '[{"product_id": 2, "quantity": 5}]');
+
+-- Multiple products in one order
+CALL ProcessNewOrder(1, '[{"product_id": 2, "quantity": 2}, {"product_id": 3, "quantity": 1}]');
 ```
 
 ---
@@ -323,16 +357,28 @@ ORDER BY total_amount_spent DESC
 LIMIT 5;
 ```
 
-### Process a New Order
+### Process a New Order (Bulk Orders Supported)
 ```sql
--- Successful order
-CALL ProcessNewOrder(1, 2, 5);
+-- Single product order
+CALL ProcessNewOrder(1, '[{"product_id": 2, "quantity": 5}]');
+
+-- Multiple products in one order
+CALL ProcessNewOrder(1, '[{"product_id": 2, "quantity": 2}, {"product_id": 3, "quantity": 1}, {"product_id": 4, "quantity": 1}]');
 
 -- This will fail (insufficient stock)
-CALL ProcessNewOrder(1, 1, 1000);
+CALL ProcessNewOrder(1, '[{"product_id": 1, "quantity": 1000}]');
 
 -- This will fail (invalid customer)
-CALL ProcessNewOrder(999, 1, 1);
+CALL ProcessNewOrder(999, '[{"product_id": 1, "quantity": 1}]');
+```
+
+### View Inventory Logs
+```sql
+-- View recent inventory changes
+SELECT * FROM inventory_logs ORDER BY id DESC LIMIT 10;
+
+-- View logs for a specific order
+SELECT * FROM inventory_logs WHERE order_id = 28;
 ```
 
 ### Check Low Stock Alerts
@@ -362,6 +408,7 @@ ORDER BY i.quantity_on_hand;
 | Inventory | 20 | Stock records for all products |
 | Orders | 27 | Various statuses: Pending, Shipped, Delivered |
 | Order Items | 45+ | Product-order associations |
+| Inventory Logs | Dynamic | Audit trail of inventory changes |
 
 ---
 

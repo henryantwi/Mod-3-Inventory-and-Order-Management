@@ -286,9 +286,14 @@ GROUP BY c.id, c.full_name, c.email;
 
 -- -----------------------------------------------
 -- Stored Procedure: ProcessNewOrder
--- Accepts Customer ID, Product ID, and Quantity as inputs
--- Handles stock validation, inventory update, and order creation in a transaction
--- Note: MySQL stored procedure syntax differs from PostgreSQL
+-- Takes a customer ID and a JSON array of items like:
+-- '[{"product_id": 1, "quantity": 2}, {"product_id": 3, "quantity": 1}]'
+-- 
+-- What it does:
+-- - Checks customer exists, validates stock for all items
+-- - Creates the order and deducts inventory
+-- - Logs everything to inventory_logs
+-- - Rolls back if anything goes wrong
 -- -----------------------------------------------
 DROP PROCEDURE IF EXISTS ProcessNewOrder;
 
@@ -296,19 +301,21 @@ DELIMITER //
 
 CREATE PROCEDURE ProcessNewOrder(
     IN p_customer_id INT,
-    IN p_product_id INT,
-    IN p_quantity INT
+    IN p_order_items JSON
 )
 BEGIN
-    DECLARE v_available_stock INT;
-    DECLARE v_product_price DECIMAL(10,2);
-    DECLARE v_total_amount DECIMAL(10,2);
     DECLARE v_new_order_id INT;
+    DECLARE v_total_amount DECIMAL(10,2) DEFAULT 0;
+    DECLARE v_item_count INT;
+    DECLARE v_current_index INT DEFAULT 0;
+    DECLARE v_product_id INT;
+    DECLARE v_quantity INT;
+    DECLARE v_product_price DECIMAL(10,2);
     DECLARE v_product_name VARCHAR(255);
-    DECLARE v_customer_exists INT;
-    DECLARE v_product_exists INT;
+    DECLARE v_available_stock INT;
+    DECLARE v_item_total DECIMAL(10,2);
     
-    -- Declare handler for errors to rollback transaction
+    -- If anything fails, roll back and re-throw the error
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         ROLLBACK;
@@ -318,68 +325,113 @@ BEGIN
     -- Start transaction
     START TRANSACTION;
     
-    -- Validate customer exists
-    SELECT COUNT(*) INTO v_customer_exists FROM customers WHERE id = p_customer_id;
-    IF v_customer_exists = 0 THEN
+    -- Make sure this customer actually exists
+    IF NOT EXISTS (SELECT 1 FROM customers WHERE id = p_customer_id) THEN
         SIGNAL SQLSTATE '45000' 
             SET MESSAGE_TEXT = 'Customer does not exist';
     END IF;
     
-    -- Validate product exists and get product details
-    SELECT name, price INTO v_product_name, v_product_price
-    FROM products 
-    WHERE id = p_product_id;
+    -- How many items are we processing?
+    SET v_item_count = JSON_LENGTH(p_order_items);
     
-    IF v_product_name IS NULL THEN
+    IF v_item_count = 0 OR v_item_count IS NULL THEN
         SIGNAL SQLSTATE '45000' 
-            SET MESSAGE_TEXT = 'Product does not exist';
+            SET MESSAGE_TEXT = 'Order items array is empty or invalid';
     END IF;
     
-    -- Check current stock level (lock the row for update simul. avoid overselling)
-    SELECT quantity_on_hand INTO v_available_stock
-    FROM inventory 
-    WHERE product_id = p_product_id
-    FOR UPDATE;
+    -- Loop through items first to validate everything before making changes
+    WHILE v_current_index < v_item_count DO
+        -- Pull out this item's product_id and quantity
+        SET v_product_id = JSON_UNQUOTE(JSON_EXTRACT(p_order_items, CONCAT('$[', v_current_index, '].product_id')));
+        SET v_quantity = JSON_UNQUOTE(JSON_EXTRACT(p_order_items, CONCAT('$[', v_current_index, '].quantity')));
+        
+        -- Can't order zero or negative quantities
+        IF v_quantity IS NULL OR v_quantity <= 0 THEN
+            SIGNAL SQLSTATE '45000' 
+                SET MESSAGE_TEXT = 'Invalid quantity: must be a positive integer';
+        END IF;
+        
+        -- Make sure the product is real
+        IF NOT EXISTS (SELECT 1 FROM products WHERE id = v_product_id) THEN
+            SIGNAL SQLSTATE '45000' 
+                SET MESSAGE_TEXT = 'One or more products do not exist';
+        END IF;
+        
+        -- Grab the product's name and price
+        SELECT name, price INTO v_product_name, v_product_price
+        FROM products 
+        WHERE id = v_product_id;
+        
+        -- Lock this inventory row so nobody else can modify it mid-transaction)
+        SELECT quantity_on_hand INTO v_available_stock
+        FROM inventory 
+        WHERE product_id = v_product_id
+        FOR UPDATE;
+        
+        IF v_available_stock IS NULL THEN
+            SIGNAL SQLSTATE '45000' 
+                SET MESSAGE_TEXT = 'No inventory record found for one or more products';
+        END IF;
+        
+        -- Do we have enough in stock?
+        IF v_available_stock < v_quantity THEN
+            SIGNAL SQLSTATE '45000' 
+                SET MESSAGE_TEXT = 'Insufficient stock for one or more products';
+        END IF;
+        
+        -- Running total
+        SET v_total_amount = v_total_amount + (v_product_price * v_quantity);
+        
+        SET v_current_index = v_current_index + 1;
+    END WHILE;
     
-    IF v_available_stock IS NULL THEN
-        SIGNAL SQLSTATE '45000' 
-            SET MESSAGE_TEXT = 'No inventory record found for product';
-    END IF;
-    
-    -- Check if sufficient stock exists
-    IF v_available_stock < p_quantity THEN
-        SIGNAL SQLSTATE '45000' 
-            SET MESSAGE_TEXT = 'Insufficient stock for product';
-    END IF;
-    
-    -- Calculate total amount
-    SET v_total_amount = v_product_price * p_quantity;
-    
-    -- Reduce inventory quantity
-    UPDATE inventory 
-    SET quantity_on_hand = quantity_on_hand - p_quantity,
-        last_updated = CURRENT_TIMESTAMP
-    WHERE product_id = p_product_id;
-    
-    -- Create new order
+    -- All validated! Now create the order
     INSERT INTO orders (customer_id, order_date, total_amount, status)
     VALUES (p_customer_id, CURDATE(), v_total_amount, 'Pending');
     
-    -- Get the new order ID
+    -- Grab the ID of the order we just created
     SET v_new_order_id = LAST_INSERT_ID();
     
-    -- Create order item
-    INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase)
-    VALUES (v_new_order_id, p_product_id, p_quantity, v_product_price);
+    -- Record that we created this order
+    INSERT INTO inventory_logs (log_type, order_id, customer_id, message)
+    VALUES ('ORDER_CREATED', v_new_order_id, p_customer_id, 
+            CONCAT('New order #', v_new_order_id, ' created with ', v_item_count, ' item(s), total: $', v_total_amount));
+    
+    -- Now actually process each item - deduct stock and create order_items
+    SET v_current_index = 0;
+    WHILE v_current_index < v_item_count DO
+        -- Get this item's details again
+        SET v_product_id = JSON_UNQUOTE(JSON_EXTRACT(p_order_items, CONCAT('$[', v_current_index, '].product_id')));
+        SET v_quantity = JSON_UNQUOTE(JSON_EXTRACT(p_order_items, CONCAT('$[', v_current_index, '].quantity')));
+        
+        -- Get product price
+        SELECT price INTO v_product_price FROM products WHERE id = v_product_id;
+        
+        -- Deduct from inventory (this fires our logging trigger automatically)
+        UPDATE inventory 
+        SET quantity_on_hand = quantity_on_hand - v_quantity,
+            last_updated = CURRENT_TIMESTAMP
+        WHERE product_id = v_product_id;
+        
+        -- Add the line item to the order
+        INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase)
+        VALUES (v_new_order_id, v_product_id, v_quantity, v_product_price);
+        
+        -- Log that we added this item
+        INSERT INTO inventory_logs (log_type, product_id, order_id, customer_id, quantity_changed, message)
+        VALUES ('ORDER_ITEM_ADDED', v_product_id, v_new_order_id, p_customer_id, v_quantity,
+                CONCAT('Added ', v_quantity, ' unit(s) of product #', v_product_id, ' to order #', v_new_order_id));
+        
+        SET v_current_index = v_current_index + 1;
+    END WHILE;
     
     -- Commit transaction
     COMMIT;
     
-    -- Return success message (MySQL way)
+    -- All done - send back the order summary
     SELECT 
         v_new_order_id AS order_id,
-        v_product_name AS product_name,
-        p_quantity AS quantity,
+        v_item_count AS items_count,
         v_total_amount AS total_amount,
         'Order successfully created!' AS message;
     
@@ -387,18 +439,25 @@ END //
 
 DELIMITER ;
 
+
 -- ============================================
 -- USAGE EXAMPLES FOR STORED PROCEDURE
 -- ============================================
 
--- Example 1: Successful order (uncomment to run)
-# CALL ProcessNewOrder(1, 2, 5);  -- Customer 1 orders 5 Wireless Mice
+-- Example 1: Single product order (uncomment to run)
+# CALL ProcessNewOrder(1, '[{"product_id": 2, "quantity": 5}]');  -- Customer 1 orders 5 Wireless Mice
 
--- Example 2: This would fail due to insufficient stock (uncomment to test)
-# CALL ProcessNewOrder(1, 1, 1000);  -- Attempting to order 1000 laptops
+-- Example 2: Multiple products in one order (uncomment to run)
+# CALL ProcessNewOrder(1, '[{"product_id": 2, "quantity": 2}, {"product_id": 3, "quantity": 1}, {"product_id": 4, "quantity": 1}]');
 
--- Example 3: This would fail due to invalid customer (uncomment to test)
--- CALL ProcessNewOrder(999, 1, 1);  -- Invalid customer ID
+-- Example 3: This would fail due to insufficient stock (uncomment to test)
+# CALL ProcessNewOrder(1, '[{"product_id": 1, "quantity": 1000}]');  -- Attempting to order 1000 laptops
+
+-- Example 4: This would fail due to invalid customer (uncomment to test)
+# CALL ProcessNewOrder(999, '[{"product_id": 1, "quantity": 1}]');  -- Invalid customer ID
+
+-- View recent inventory logs
+# SELECT * FROM inventory_logs ORDER BY id DESC LIMIT 20;
 
 
 -- ============================================

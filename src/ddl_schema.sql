@@ -117,3 +117,70 @@ CREATE INDEX idx_orders_order_date ON orders(order_date);
 CREATE INDEX idx_order_items_order_id ON order_items(order_id);
 CREATE INDEX idx_order_items_product_id ON order_items(product_id);
 CREATE INDEX idx_products_category ON products(category);
+
+-- ============================================
+-- INVENTORY_LOGS TABLE
+-- This table keeps a history of all inventory changes
+-- ============================================
+DROP TABLE IF EXISTS inventory_logs;
+
+CREATE TABLE inventory_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    log_type VARCHAR(50) NOT NULL,
+    product_id INT,
+    order_id INT,
+    customer_id INT,
+    quantity_changed INT,
+    old_quantity INT,
+    new_quantity INT,
+    message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- These foreign keys are optional - we allow NULLs so logs aren't deleted
+-- if the related record is removed
+ALTER TABLE inventory_logs
+    ADD CONSTRAINT fk_inventory_logs_product
+    FOREIGN KEY (product_id) REFERENCES products (id)
+    ON DELETE SET NULL;
+
+ALTER TABLE inventory_logs
+    ADD CONSTRAINT fk_inventory_logs_order
+    FOREIGN KEY (order_id) REFERENCES orders (id)
+    ON DELETE SET NULL;
+
+ALTER TABLE inventory_logs
+    ADD CONSTRAINT fk_inventory_logs_customer
+    FOREIGN KEY (customer_id) REFERENCES customers (id)
+    ON DELETE SET NULL;
+
+-- Speed up log lookups
+CREATE INDEX idx_inventory_logs_product_id ON inventory_logs(product_id);
+CREATE INDEX idx_inventory_logs_created_at ON inventory_logs(created_at);
+
+-- ============================================
+-- TRIGGER: Auto-log inventory changes
+-- ============================================
+
+-- Clean up any old version first
+DROP TRIGGER IF EXISTS trg_inventory_update_log;
+
+DELIMITER //
+
+-- Whenever inventory quantities change, this trigger captures the before/after values
+CREATE TRIGGER trg_inventory_update_log
+AFTER UPDATE ON inventory
+FOR EACH ROW
+BEGIN
+    INSERT INTO inventory_logs (log_type, product_id, quantity_changed, old_quantity, new_quantity, message)
+    VALUES (
+        'INVENTORY_UPDATED', 
+        NEW.product_id, 
+        OLD.quantity_on_hand - NEW.quantity_on_hand, 
+        OLD.quantity_on_hand, 
+        NEW.quantity_on_hand, 
+        CONCAT('Inventory changed from ', OLD.quantity_on_hand, ' to ', NEW.quantity_on_hand)
+    );
+END //
+
+DELIMITER ;
