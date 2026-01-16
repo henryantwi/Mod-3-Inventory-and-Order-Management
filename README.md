@@ -31,7 +31,7 @@ This project is a capstone for the SQL module, covering the complete database li
 
 The database consists of 6 interconnected tables following a normalized design:
 
-
+![ERD Diagram](docs/erd_diagram.png)
 
 ### Relationships
 
