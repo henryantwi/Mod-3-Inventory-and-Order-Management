@@ -314,10 +314,14 @@ BEGIN
     DECLARE v_product_name VARCHAR(255);
     DECLARE v_available_stock INT;
     DECLARE v_item_total DECIMAL(10,2);
+    DECLARE v_error_message TEXT;
     
-    -- If anything fails, roll back and re-throw the error
+    -- If anything fails, log the error then roll back
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
+        GET DIAGNOSTICS CONDITION 1 v_error_message = MESSAGE_TEXT;
+        INSERT INTO inventory_logs (log_type, customer_id, message)
+        VALUES ('ERROR', p_customer_id, CONCAT('ProcessNewOrder failed: ', IFNULL(v_error_message, 'Unknown error')));
         ROLLBACK;
         RESIGNAL;
     END;
@@ -458,6 +462,224 @@ DELIMITER ;
 
 -- View recent inventory logs
 # SELECT * FROM inventory_logs ORDER BY id DESC LIMIT 20;
+
+
+-- ============================================
+-- STORED PROCEDURE: CancelOrder
+-- Cancels an order and restores inventory
+-- ============================================
+DROP PROCEDURE IF EXISTS CancelOrder;
+
+DELIMITER //
+
+CREATE PROCEDURE CancelOrder(
+    IN p_order_id INT
+)
+BEGIN
+    DECLARE v_current_status VARCHAR(50);
+    DECLARE v_customer_id INT;
+    DECLARE v_done INT DEFAULT FALSE;
+    DECLARE v_product_id INT;
+    DECLARE v_quantity INT;
+    
+    -- Cursor to loop through order items
+    DECLARE item_cursor CURSOR FOR 
+        SELECT product_id, quantity FROM order_items WHERE order_id = p_order_id;
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_done = TRUE;
+    DECLARE v_error_message TEXT;
+    
+    -- Log error before rolling back
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        GET DIAGNOSTICS CONDITION 1 v_error_message = MESSAGE_TEXT;
+        INSERT INTO inventory_logs (log_type, order_id, message)
+        VALUES ('ERROR', p_order_id, CONCAT('CancelOrder failed: ', IFNULL(v_error_message, 'Unknown error')));
+        ROLLBACK;
+        RESIGNAL;
+    END;
+    
+    START TRANSACTION;
+    
+    -- Check if order exists and get current status
+    IF NOT EXISTS (SELECT 1 FROM orders WHERE id = p_order_id) THEN
+        SIGNAL SQLSTATE '45000' 
+            SET MESSAGE_TEXT = 'Order does not exist';
+    END IF;
+    
+    SELECT status, customer_id INTO v_current_status, v_customer_id 
+    FROM orders WHERE id = p_order_id;
+    
+    -- Can't cancel already delivered or cancelled orders
+    IF v_current_status IN ('Delivered', 'Cancelled') THEN
+        SIGNAL SQLSTATE '45000' 
+            SET MESSAGE_TEXT = 'Cannot cancel delivered or already cancelled orders';
+    END IF;
+    
+    -- Restore inventory for each item
+    OPEN item_cursor;
+    restore_loop: LOOP
+        FETCH item_cursor INTO v_product_id, v_quantity;
+        IF v_done THEN
+            LEAVE restore_loop;
+        END IF;
+        
+        -- Add quantity back to inventory (this triggers the logging)
+        UPDATE inventory 
+        SET quantity_on_hand = quantity_on_hand + v_quantity
+        WHERE product_id = v_product_id;
+        
+        -- Log the restoration
+        INSERT INTO inventory_logs (log_type, product_id, order_id, customer_id, quantity_changed, message)
+        VALUES ('STOCK_RESTORED', v_product_id, p_order_id, v_customer_id, v_quantity,
+                CONCAT('Restored ', v_quantity, ' unit(s) of product #', v_product_id, ' from cancelled order #', p_order_id));
+    END LOOP;
+    CLOSE item_cursor;
+    
+    -- Update order status to Cancelled (this triggers status change log)
+    UPDATE orders SET status = 'Cancelled' WHERE id = p_order_id;
+    
+    COMMIT;
+    
+    SELECT p_order_id AS order_id, 'Order cancelled and inventory restored' AS message;
+    
+END //
+
+DELIMITER ;
+
+
+-- ============================================
+-- STORED PROCEDURE: RestockInventory
+-- Adds stock to a product with logging
+-- ============================================
+DROP PROCEDURE IF EXISTS RestockInventory;
+
+DELIMITER //
+
+CREATE PROCEDURE RestockInventory(
+    IN p_product_id INT,
+    IN p_quantity INT
+)
+BEGIN
+    DECLARE v_old_quantity INT;
+    DECLARE v_product_name VARCHAR(255);
+    DECLARE v_error_message TEXT;
+    
+    -- Log error before rolling back
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        GET DIAGNOSTICS CONDITION 1 v_error_message = MESSAGE_TEXT;
+        INSERT INTO inventory_logs (log_type, product_id, message)
+        VALUES ('ERROR', p_product_id, CONCAT('RestockInventory failed: ', IFNULL(v_error_message, 'Unknown error')));
+        ROLLBACK;
+        RESIGNAL;
+    END;
+    
+    START TRANSACTION;
+    
+    -- Validate inputs
+    IF p_quantity <= 0 THEN
+        SIGNAL SQLSTATE '45000' 
+            SET MESSAGE_TEXT = 'Quantity must be positive';
+    END IF;
+    
+    IF NOT EXISTS (SELECT 1 FROM products WHERE id = p_product_id) THEN
+        SIGNAL SQLSTATE '45000' 
+            SET MESSAGE_TEXT = 'Product does not exist';
+    END IF;
+    
+    -- Get current quantity and product name
+    SELECT i.quantity_on_hand, p.name INTO v_old_quantity, v_product_name
+    FROM inventory i
+    JOIN products p ON i.product_id = p.id
+    WHERE i.product_id = p_product_id
+    FOR UPDATE;
+    
+    -- Update inventory (triggers auto-logging)
+    UPDATE inventory 
+    SET quantity_on_hand = quantity_on_hand + p_quantity
+    WHERE product_id = p_product_id;
+    
+    -- Log the restock action
+    INSERT INTO inventory_logs (log_type, product_id, quantity_changed, old_quantity, new_quantity, message)
+    VALUES ('STOCK_RESTOCKED', p_product_id, p_quantity, v_old_quantity, v_old_quantity + p_quantity,
+            CONCAT('Restocked ', p_quantity, ' unit(s) of "', v_product_name, '"'));
+    
+    COMMIT;
+    
+    SELECT p_product_id AS product_id, v_product_name AS product_name, 
+           v_old_quantity AS old_stock, v_old_quantity + p_quantity AS new_stock,
+           'Inventory restocked successfully' AS message;
+    
+END //
+
+DELIMITER ;
+
+
+-- ============================================
+-- STORED PROCEDURE: UpdateOrderStatus
+-- Updates order status with validation and logging
+-- ============================================
+DROP PROCEDURE IF EXISTS UpdateOrderStatus;
+
+DELIMITER //
+
+CREATE PROCEDURE UpdateOrderStatus(
+    IN p_order_id INT,
+    IN p_new_status VARCHAR(50)
+)
+BEGIN
+    DECLARE v_current_status VARCHAR(50);
+    DECLARE v_error_message TEXT;
+    
+    -- Log error before rolling back
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        GET DIAGNOSTICS CONDITION 1 v_error_message = MESSAGE_TEXT;
+        INSERT INTO inventory_logs (log_type, order_id, message)
+        VALUES ('ERROR', p_order_id, CONCAT('UpdateOrderStatus failed: ', IFNULL(v_error_message, 'Unknown error')));
+        ROLLBACK;
+        RESIGNAL;
+    END;
+    
+    START TRANSACTION;
+    
+    -- Check if order exists
+    IF NOT EXISTS (SELECT 1 FROM orders WHERE id = p_order_id) THEN
+        SIGNAL SQLSTATE '45000' 
+            SET MESSAGE_TEXT = 'Order does not exist';
+    END IF;
+    
+    -- Validate new status
+    IF p_new_status NOT IN ('Pending', 'Shipped', 'Delivered', 'Cancelled') THEN
+        SIGNAL SQLSTATE '45000' 
+            SET MESSAGE_TEXT = 'Invalid status. Must be: Pending, Shipped, Delivered, or Cancelled';
+    END IF;
+    
+    SELECT status INTO v_current_status FROM orders WHERE id = p_order_id;
+    
+    -- Can't change status of cancelled orders
+    IF v_current_status = 'Cancelled' THEN
+        SIGNAL SQLSTATE '45000' 
+            SET MESSAGE_TEXT = 'Cannot update status of cancelled orders';
+    END IF;
+    
+    -- Use CancelOrder procedure for cancellations (to restore inventory)
+    IF p_new_status = 'Cancelled' THEN
+        CALL CancelOrder(p_order_id);
+    ELSE
+        -- Update status (triggers the logging automatically)
+        UPDATE orders SET status = p_new_status WHERE id = p_order_id;
+    END IF;
+    
+    COMMIT;
+    
+    SELECT p_order_id AS order_id, v_current_status AS old_status, 
+           p_new_status AS new_status, 'Status updated successfully' AS message;
+    
+END //
+
+DELIMITER ;
+
 
 
 -- ============================================

@@ -183,4 +183,38 @@ BEGIN
     );
 END //
 
+-- When an order's status changes, log the transition
+CREATE TRIGGER trg_order_status_change
+AFTER UPDATE ON orders
+FOR EACH ROW
+BEGIN
+    IF OLD.status != NEW.status THEN
+        INSERT INTO inventory_logs (log_type, order_id, customer_id, message)
+        VALUES (
+            'ORDER_STATUS_CHANGED',
+            NEW.id,
+            NEW.customer_id,
+            CONCAT('Order #', NEW.id, ' status changed: ', OLD.status, ' -> ', NEW.status)
+        );
+    END IF;
+END //
+
+-- When a new product is added, automatically create an inventory record with 0 stock
+CREATE TRIGGER trg_auto_create_inventory
+AFTER INSERT ON products
+FOR EACH ROW
+BEGIN
+    INSERT INTO inventory (product_id, quantity_on_hand)
+    VALUES (NEW.id, 0);
+    
+    INSERT INTO inventory_logs (log_type, product_id, new_quantity, message)
+    VALUES (
+        'PRODUCT_ADDED',
+        NEW.id,
+        0,
+        CONCAT('New product "', NEW.name, '" added, inventory initialized to 0')
+    );
+END //
+
 DELIMITER ;
+

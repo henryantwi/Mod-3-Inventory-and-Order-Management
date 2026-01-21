@@ -131,7 +131,9 @@ CREATE TABLE inventory_logs (
 
 | Trigger | Event | Description |
 |---------|-------|-------------|
-| `trg_inventory_update_log` | AFTER UPDATE on inventory | Automatically logs all inventory quantity changes |
+| `trg_inventory_update_log` | AFTER UPDATE on inventory | Logs all inventory quantity changes |
+| `trg_order_status_change` | AFTER UPDATE on orders | Logs order status transitions |
+| `trg_auto_create_inventory` | AFTER INSERT on products | Auto-creates inventory record for new products |
 
 ### Data Integrity Features
 
@@ -287,6 +289,24 @@ CALL ProcessNewOrder(1, '[{"product_id": 2, "quantity": 5}]');
 
 -- Multiple products in one order
 CALL ProcessNewOrder(1, '[{"product_id": 2, "quantity": 2}, {"product_id": 3, "quantity": 1}]');
+```
+
+#### CancelOrder Stored Procedure
+Cancels an order and automatically restores inventory:
+```sql
+CALL CancelOrder(28);  -- Restores all items from order #28 to inventory
+```
+
+#### RestockInventory Stored Procedure
+Adds stock to a product with full logging:
+```sql
+CALL RestockInventory(1, 50);  -- Add 50 units to product #1
+```
+
+#### UpdateOrderStatus Stored Procedure
+Updates order status with validation:
+```sql
+CALL UpdateOrderStatus(28, 'Shipped');  -- Change order #28 to Shipped
 ```
 
 ---
