@@ -314,14 +314,14 @@ BEGIN
     DECLARE v_product_name VARCHAR(255);
     DECLARE v_available_stock INT;
     DECLARE v_item_total DECIMAL(10,2);
-    DECLARE v_error_message TEXT;
     
-    -- If anything fails, log the error then roll back
+    -- If anything fails, roll back and report error to user
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
-        GET DIAGNOSTICS CONDITION 1 v_error_message = MESSAGE_TEXT;
-        INSERT INTO inventory_logs (log_type, customer_id, message)
-        VALUES ('ERROR', p_customer_id, CONCAT('ProcessNewOrder failed: ', IFNULL(v_error_message, 'Unknown error')));
+        -- Clear session variables on error
+        SET @inventory_context = NULL;
+        SET @current_order_id = NULL;
+        SET @current_customer_id = NULL;
         ROLLBACK;
         RESIGNAL;
     END;
@@ -396,10 +396,10 @@ BEGIN
     -- Grab the ID of the order we just created
     SET v_new_order_id = LAST_INSERT_ID();
     
-    -- Record that we created this order
-    INSERT INTO inventory_logs (log_type, order_id, customer_id, message)
-    VALUES ('ORDER_CREATED', v_new_order_id, p_customer_id, 
-            CONCAT('New order #', v_new_order_id, ' created with ', v_item_count, ' item(s), total: $', v_total_amount));
+    -- Set session variables for triggers to use (ORDER_CREATED is logged by trg_order_created)
+    SET @inventory_context = 'ORDER_DEDUCTION';
+    SET @current_order_id = v_new_order_id;
+    SET @current_customer_id = p_customer_id;
     
     -- Now actually process each item - deduct stock and create order_items
     SET v_current_index = 0;
@@ -417,20 +417,20 @@ BEGIN
             last_updated = CURRENT_TIMESTAMP
         WHERE product_id = v_product_id;
         
-        -- Add the line item to the order
+        -- Add the line item to the order (triggers trg_order_item_added)
         INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase)
         VALUES (v_new_order_id, v_product_id, v_quantity, v_product_price);
-        
-        -- Log that we added this item
-        INSERT INTO inventory_logs (log_type, product_id, order_id, customer_id, quantity_changed, message)
-        VALUES ('ORDER_ITEM_ADDED', v_product_id, v_new_order_id, p_customer_id, v_quantity,
-                CONCAT('Added ', v_quantity, ' unit(s) of product #', v_product_id, ' to order #', v_new_order_id));
         
         SET v_current_index = v_current_index + 1;
     END WHILE;
     
     -- Commit transaction
     COMMIT;
+    
+    -- Clear session variables after successful completion
+    SET @inventory_context = NULL;
+    SET @current_order_id = NULL;
+    SET @current_customer_id = NULL;
     
     -- All done - send back the order summary
     SELECT 
@@ -486,14 +486,14 @@ BEGIN
     DECLARE item_cursor CURSOR FOR 
         SELECT product_id, quantity FROM order_items WHERE order_id = p_order_id;
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_done = TRUE;
-    DECLARE v_error_message TEXT;
     
-    -- Log error before rolling back
+    -- If anything fails, roll back and report error to user
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
-        GET DIAGNOSTICS CONDITION 1 v_error_message = MESSAGE_TEXT;
-        INSERT INTO inventory_logs (log_type, order_id, message)
-        VALUES ('ERROR', p_order_id, CONCAT('CancelOrder failed: ', IFNULL(v_error_message, 'Unknown error')));
+        -- Clear session variables on error
+        SET @inventory_context = NULL;
+        SET @current_order_id = NULL;
+        SET @current_customer_id = NULL;
         ROLLBACK;
         RESIGNAL;
     END;
@@ -515,6 +515,11 @@ BEGIN
             SET MESSAGE_TEXT = 'Cannot cancel delivered or already cancelled orders';
     END IF;
     
+    -- Set session variables for triggers to use
+    SET @inventory_context = 'ORDER_RESTORATION';
+    SET @current_order_id = p_order_id;
+    SET @current_customer_id = v_customer_id;
+    
     -- Restore inventory for each item
     OPEN item_cursor;
     restore_loop: LOOP
@@ -523,22 +528,22 @@ BEGIN
             LEAVE restore_loop;
         END IF;
         
-        -- Add quantity back to inventory (this triggers the logging)
+        -- Add quantity back to inventory (triggers trg_inventory_update_log with STOCK_RESTORED context)
         UPDATE inventory 
         SET quantity_on_hand = quantity_on_hand + v_quantity
         WHERE product_id = v_product_id;
-        
-        -- Log the restoration
-        INSERT INTO inventory_logs (log_type, product_id, order_id, customer_id, quantity_changed, message)
-        VALUES ('STOCK_RESTORED', v_product_id, p_order_id, v_customer_id, v_quantity,
-                CONCAT('Restored ', v_quantity, ' unit(s) of product #', v_product_id, ' from cancelled order #', p_order_id));
     END LOOP;
     CLOSE item_cursor;
     
-    -- Update order status to Cancelled (this triggers status change log)
+    -- Update order status to Cancelled (triggers trg_order_status_change)
     UPDATE orders SET status = 'Cancelled' WHERE id = p_order_id;
     
     COMMIT;
+    
+    -- Clear session variables after successful completion
+    SET @inventory_context = NULL;
+    SET @current_order_id = NULL;
+    SET @current_customer_id = NULL;
     
     SELECT p_order_id AS order_id, 'Order cancelled and inventory restored' AS message;
     
@@ -562,14 +567,12 @@ CREATE PROCEDURE RestockInventory(
 BEGIN
     DECLARE v_old_quantity INT;
     DECLARE v_product_name VARCHAR(255);
-    DECLARE v_error_message TEXT;
     
-    -- Log error before rolling back
+    -- If anything fails, roll back and report error to user
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
-        GET DIAGNOSTICS CONDITION 1 v_error_message = MESSAGE_TEXT;
-        INSERT INTO inventory_logs (log_type, product_id, message)
-        VALUES ('ERROR', p_product_id, CONCAT('RestockInventory failed: ', IFNULL(v_error_message, 'Unknown error')));
+        -- Clear session variables on error
+        SET @inventory_context = NULL;
         ROLLBACK;
         RESIGNAL;
     END;
@@ -594,17 +597,18 @@ BEGIN
     WHERE i.product_id = p_product_id
     FOR UPDATE;
     
-    -- Update inventory (triggers auto-logging)
+    -- Set session variables for triggers to use
+    SET @inventory_context = 'MANUAL_RESTOCK';
+    
+    -- Update inventory (triggers trg_inventory_update_log with STOCK_RESTOCKED context)
     UPDATE inventory 
     SET quantity_on_hand = quantity_on_hand + p_quantity
     WHERE product_id = p_product_id;
     
-    -- Log the restock action
-    INSERT INTO inventory_logs (log_type, product_id, quantity_changed, old_quantity, new_quantity, message)
-    VALUES ('STOCK_RESTOCKED', p_product_id, p_quantity, v_old_quantity, v_old_quantity + p_quantity,
-            CONCAT('Restocked ', p_quantity, ' unit(s) of "', v_product_name, '"'));
-    
     COMMIT;
+    
+    -- Clear session variables after successful completion
+    SET @inventory_context = NULL;
     
     SELECT p_product_id AS product_id, v_product_name AS product_name, 
            v_old_quantity AS old_stock, v_old_quantity + p_quantity AS new_stock,
@@ -629,14 +633,10 @@ CREATE PROCEDURE UpdateOrderStatus(
 )
 BEGIN
     DECLARE v_current_status VARCHAR(50);
-    DECLARE v_error_message TEXT;
     
-    -- Log error before rolling back
+    -- If anything fails, roll back and report error to user
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
-        GET DIAGNOSTICS CONDITION 1 v_error_message = MESSAGE_TEXT;
-        INSERT INTO inventory_logs (log_type, order_id, message)
-        VALUES ('ERROR', p_order_id, CONCAT('UpdateOrderStatus failed: ', IFNULL(v_error_message, 'Unknown error')));
         ROLLBACK;
         RESIGNAL;
     END;
@@ -667,7 +667,7 @@ BEGIN
     IF p_new_status = 'Cancelled' THEN
         CALL CancelOrder(p_order_id);
     ELSE
-        -- Update status (triggers the logging automatically)
+        -- Update status (triggers trg_order_status_change automatically)
         UPDATE orders SET status = p_new_status WHERE id = p_order_id;
     END IF;
     

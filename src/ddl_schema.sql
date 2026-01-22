@@ -126,7 +126,16 @@ DROP TABLE IF EXISTS inventory_logs;
 
 CREATE TABLE inventory_logs (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    log_type VARCHAR(50) NOT NULL,
+    log_type ENUM(
+        'ORDER_CREATED',
+        'ORDER_ITEM_ADDED',
+        'ORDER_STATUS_CHANGED',
+        'INVENTORY_UPDATED',
+        'STOCK_DEDUCTED',
+        'STOCK_RESTORED',
+        'STOCK_RESTOCKED',
+        'PRODUCT_ADDED'
+    ) NOT NULL,
     product_id INT,
     order_id INT,
     customer_id INT,
@@ -168,18 +177,44 @@ DROP TRIGGER IF EXISTS trg_inventory_update_log;
 DELIMITER //
 
 -- Whenever inventory quantities change, this trigger captures the before/after values
+-- Uses session variables to determine the context of the change:
+-- @inventory_context = 'ORDER_DEDUCTION' -> STOCK_DEDUCTED
+-- @inventory_context = 'ORDER_RESTORATION' -> STOCK_RESTORED
+-- @inventory_context = 'MANUAL_RESTOCK' -> STOCK_RESTOCKED
+-- NULL/other -> INVENTORY_UPDATED
 CREATE TRIGGER trg_inventory_update_log
 AFTER UPDATE ON inventory
 FOR EACH ROW
 BEGIN
-    INSERT INTO inventory_logs (log_type, product_id, quantity_changed, old_quantity, new_quantity, message)
+    DECLARE v_log_type VARCHAR(50);
+    DECLARE v_message TEXT;
+    
+    -- Determine log type based on context
+    SET v_log_type = CASE @inventory_context
+        WHEN 'ORDER_DEDUCTION' THEN 'STOCK_DEDUCTED'
+        WHEN 'ORDER_RESTORATION' THEN 'STOCK_RESTORED'
+        WHEN 'MANUAL_RESTOCK' THEN 'STOCK_RESTOCKED'
+        ELSE 'INVENTORY_UPDATED'
+    END;
+    
+    -- Build appropriate message based on context
+    SET v_message = CASE @inventory_context
+        WHEN 'ORDER_DEDUCTION' THEN CONCAT('Deducted ', OLD.quantity_on_hand - NEW.quantity_on_hand, ' unit(s) for order #', IFNULL(@current_order_id, 'N/A'), ', stock: ', OLD.quantity_on_hand, ' -> ', NEW.quantity_on_hand)
+        WHEN 'ORDER_RESTORATION' THEN CONCAT('Restored ', NEW.quantity_on_hand - OLD.quantity_on_hand, ' unit(s) from cancelled order #', IFNULL(@current_order_id, 'N/A'), ', stock: ', OLD.quantity_on_hand, ' -> ', NEW.quantity_on_hand)
+        WHEN 'MANUAL_RESTOCK' THEN CONCAT('Restocked ', NEW.quantity_on_hand - OLD.quantity_on_hand, ' unit(s), stock: ', OLD.quantity_on_hand, ' -> ', NEW.quantity_on_hand)
+        ELSE CONCAT('Inventory changed from ', OLD.quantity_on_hand, ' to ', NEW.quantity_on_hand)
+    END;
+    
+    INSERT INTO inventory_logs (log_type, product_id, order_id, customer_id, quantity_changed, old_quantity, new_quantity, message)
     VALUES (
-        'INVENTORY_UPDATED', 
-        NEW.product_id, 
+        v_log_type, 
+        NEW.product_id,
+        @current_order_id,
+        @current_customer_id,
         OLD.quantity_on_hand - NEW.quantity_on_hand, 
         OLD.quantity_on_hand, 
         NEW.quantity_on_hand, 
-        CONCAT('Inventory changed from ', OLD.quantity_on_hand, ' to ', NEW.quantity_on_hand)
+        v_message
     );
 END //
 
@@ -213,6 +248,40 @@ BEGIN
         NEW.id,
         0,
         CONCAT('New product "', NEW.name, '" added, inventory initialized to 0')
+    );
+END //
+
+-- When a new order is created, log it automatically
+DROP TRIGGER IF EXISTS trg_order_created //
+
+CREATE TRIGGER trg_order_created
+AFTER INSERT ON orders
+FOR EACH ROW
+BEGIN
+    INSERT INTO inventory_logs (log_type, order_id, customer_id, message)
+    VALUES (
+        'ORDER_CREATED',
+        NEW.id,
+        NEW.customer_id,
+        CONCAT('New order #', NEW.id, ' created, total: $', NEW.total_amount)
+    );
+END //
+
+-- When an order item is added, log it automatically
+DROP TRIGGER IF EXISTS trg_order_item_added //
+
+CREATE TRIGGER trg_order_item_added
+AFTER INSERT ON order_items
+FOR EACH ROW
+BEGIN
+    INSERT INTO inventory_logs (log_type, product_id, order_id, customer_id, quantity_changed, message)
+    VALUES (
+        'ORDER_ITEM_ADDED',
+        NEW.product_id,
+        NEW.order_id,
+        @current_customer_id,
+        NEW.quantity,
+        CONCAT('Added ', NEW.quantity, ' unit(s) of product #', NEW.product_id, ' to order #', NEW.order_id)
     );
 END //
 
